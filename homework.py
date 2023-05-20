@@ -1,3 +1,4 @@
+from json import JSONDecodeError
 import logging
 import requests
 import os
@@ -10,9 +11,8 @@ from http import HTTPStatus
 load_dotenv()
 
 ONE_MONTH_UNIX = 2629743
-OLD_STATUS = ''
 
-PRACTICUM_TOKEN = 'y0_AgAAAABfxnlAAAYckQAAAADiRp9wzgiPdhBOQYiH1yDJN9ltad080Do'
+PRACTICUM_TOKEN = os.getenv('YP_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TOKEN')
 TELEGRAM_CHAT_ID = '1099215744'
 
@@ -30,13 +30,7 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    if PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID is not None:
-        return True
-    else:
-        logging.critical(
-            'Ошибка доступности переменных.'
-        )
-        return False
+    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
 
 
 def send_message(bot, message):
@@ -46,9 +40,6 @@ def send_message(bot, message):
             chat_id=TELEGRAM_CHAT_ID,
             text=message
         )
-        logging.debug(
-            'Сообщение успешно отправлено.'
-        )
     except telegram.error.TelegramError as error:
         logging.error(
             f'Ошибка отправки сообщения: {error}.'
@@ -56,6 +47,9 @@ def send_message(bot, message):
         raise telegram.error.TelegramError(
             f'Ошибка отправки сообщения: {error}.'
         )
+    logging.debug(
+        'Сообщение успешно отправлено.'
+    )
 
 
 def get_api_answer(timestamp):
@@ -73,15 +67,6 @@ def get_api_answer(timestamp):
         raise ConnectionError(
             'Ошибка запроса к эндпоинту.'
         )
-    try:
-        isinstance(response.json, dict)
-    except TypeError:
-        logging.error(
-            'Неверный тип данных.'
-        )
-        raise TypeError(
-            'Неверный тип данных.'
-        )
     if response.status_code != HTTPStatus.OK:
         logging.error(
             f'Ошибка запроса к эндпоинту: {response.status_code}'
@@ -89,7 +74,15 @@ def get_api_answer(timestamp):
         raise requests.HTTPError(
             f'Ошибка запроса к эндпоинту: {response.status_code}'
         )
-    return response.json()
+    try:
+        return response.json()
+    except JSONDecodeError:
+        logging.error(
+            'Ответ сервера не преобразовывается в JSON.'
+        )
+        raise JSONDecodeError(
+            'Ответ сервера не преобразовывается в JSON.'
+        )
 
 
 def check_response(response):
@@ -115,14 +108,12 @@ def check_response(response):
         raise TypeError(
             'Ответ API домашки под ключом `homeworks` не список.'
         )
-    else:
-        homework = response.get('homeworks')
-        return homework
+    homework = response.get('homeworks')
+    return homework
 
 
 def parse_status(homework):
     """Извлекает статус домашней работы."""
-    global OLD_STATUS
     status = homework.get('status')
     homework_name = homework.get('homework_name')
     if homework_name is None:
@@ -139,11 +130,15 @@ def parse_status(homework):
         raise KeyError(
             'Недокументированный статус домашней работы.'
         )
-    if status == OLD_STATUS:
-        logging.debug('Изменений нет.')
+    if not homework:
+        logging.error(
+            'Список домашних работ пуст.'
+        )
+        raise KeyError(
+            'Список домашних работ пуст.'
+        )
     else:
         verdict = HOMEWORK_VERDICTS[status]
-        OLD_STATUS = status
         return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
@@ -151,31 +146,33 @@ def main():
     """Основная логика работы бота."""
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time()) - ONE_MONTH_UNIX
+    old_status = ''
+    error_message = ''
 
     while True:
         if check_tokens() is False:
+            logging.critical(
+                'Ошибка доступности переменных.'
+            )
             break
         try:
             response = get_api_answer(timestamp)
             homework = check_response(response)[0]
             message = parse_status(homework)
-            send_message(bot, message)
+            if message != old_status:
+                old_status = message
+                send_message(bot, message)
+                timestamp = response.get('current_date', timestamp)
+            error_message = ''
         except telegram.TelegramError as error:
             logging.error(
                 f'Ошибка отправки сообщения: {error}.'
             )
-        except ConnectionError as error:
-            message = f'Ошибка запроса к эндпоинту: {error}.'
-            send_message(bot, message)
-        except TypeError as error:
-            message = f'Неверный тип данных: {error}.'
-            send_message(bot, message)
-        except KeyError as error:
-            message = f'Ошибка ключей или значений: {error}.'
-            send_message(bot, message)
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-            send_message(bot, message)
+            if error_message != message:
+                send_message(bot, message)
+                error_message != message
         finally:
             time.sleep(RETRY_PERIOD)
 
