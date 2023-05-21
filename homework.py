@@ -1,5 +1,6 @@
 from json import JSONDecodeError
 import logging
+import sys
 import requests
 import os
 import telegram
@@ -41,9 +42,6 @@ def send_message(bot, message):
             text=message
         )
     except telegram.error.TelegramError as error:
-        logging.error(
-            f'Ошибка отправки сообщения: {error}.'
-        )
         raise telegram.error.TelegramError(
             f'Ошибка отправки сообщения: {error}.'
         )
@@ -61,16 +59,10 @@ def get_api_answer(timestamp):
             params={'from_date': timestamp}
         )
     except requests.exceptions.RequestException:
-        logging.error(
-            'Ошибка запроса к эндпоинту.'
-        )
         raise ConnectionError(
             'Ошибка запроса к эндпоинту.'
         )
     if response.status_code != HTTPStatus.OK:
-        logging.error(
-            f'Ошибка запроса к эндпоинту: {response.status_code}'
-        )
         raise requests.HTTPError(
             f'Ошибка запроса к эндпоинту: {response.status_code}'
         )
@@ -88,23 +80,14 @@ def get_api_answer(timestamp):
 def check_response(response):
     """Проверяет ответ API на соответствие документации."""
     if not isinstance(response, dict):
-        logging.error(
-            'Ответ API домашки не словарь.'
-        )
         raise TypeError(
             'Ответ API домашки не словарь.'
         )
     if 'homeworks' not in response:
-        logging.error(
-            'В ответе API домашки нет ключа "homeworks".'
-        )
         raise KeyError(
             'В ответе API домашки нет ключа "homeworks".'
         )
     if not isinstance(response.get('homeworks'), list):
-        logging.error(
-            'Ответ API домашки под ключом `homeworks` не список.'
-        )
         raise TypeError(
             'Ответ API домашки под ключом `homeworks` не список.'
         )
@@ -117,58 +100,48 @@ def parse_status(homework):
     status = homework.get('status')
     homework_name = homework.get('homework_name')
     if homework_name is None:
-        logging.error(
-            'Такой домашней работы нет.'
-        )
         raise KeyError(
             'Такой домашней работы нет.'
         )
     if status not in HOMEWORK_VERDICTS:
-        logging.error(
-            'Недокументированный статус домашней работы.'
-        )
         raise KeyError(
             'Недокументированный статус домашней работы.'
         )
     if not homework:
-        logging.error(
-            'Список домашних работ пуст.'
-        )
         raise KeyError(
             'Список домашних работ пуст.'
         )
-    else:
-        verdict = HOMEWORK_VERDICTS[status]
-        return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    verdict = HOMEWORK_VERDICTS[status]
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def main():
     """Основная логика работы бота."""
+    if not check_tokens():
+        logging.critical(
+            'Ошибка доступности переменных.'
+        )
+        sys.exit()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time()) - ONE_MONTH_UNIX
-    old_status = ''
     error_message = ''
 
     while True:
-        if check_tokens() is False:
-            logging.critical(
-                'Ошибка доступности переменных.'
-            )
-            break
         try:
             response = get_api_answer(timestamp)
             homework = check_response(response)[0]
             message = parse_status(homework)
-            if message != old_status:
-                old_status = message
-                send_message(bot, message)
-                timestamp = response.get('current_date', timestamp)
+            send_message(bot, message)
+            timestamp = response.get('current_date', timestamp)
             error_message = ''
         except telegram.TelegramError as error:
             logging.error(
                 f'Ошибка отправки сообщения: {error}.'
             )
         except Exception as error:
+            logging.error(
+                f'Сбой в работе программы: {error}'
+            )
             message = f'Сбой в работе программы: {error}'
             if error_message != message:
                 send_message(bot, message)
