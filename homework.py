@@ -69,9 +69,6 @@ def get_api_answer(timestamp):
     try:
         return response.json()
     except JSONDecodeError:
-        logging.error(
-            'Ответ сервера не преобразовывается в JSON.'
-        )
         raise JSONDecodeError(
             'Ответ сервера не преобразовывается в JSON.'
         )
